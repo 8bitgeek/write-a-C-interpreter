@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <memory.h>
 #include <string.h>
@@ -11,13 +12,13 @@ int token; // current token
 // instructions
 enum { LEA ,IMM ,JMP ,CALL,JZ  ,JNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PUSH,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,MSET,MCMP,EXIT };
+       OPEN,READ,CLOS,PRTF,MALC,MSET,MCMP,FREE,EXIT };
 
 // tokens and classes (operators last and in precedence order)
 // copied from c4
 enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
-  Char, Else, Enum, If, Int, Return, Sizeof, While,
+  Char, Else, Enum, If, Int, Float, Return, Sizeof, While,
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
 };
 
@@ -26,7 +27,7 @@ enum {Token, Hash, Name, Type, Class, Value, BType, BClass, BValue, IdSize};
 
 
 // types of variable/function
-enum { CHAR, INT, PTR };
+enum { CHAR, INT, FLOAT, PTR };
 
 // type of declaration.
 enum {Global, Local};
@@ -40,7 +41,7 @@ int *idmain;
 char *src, *old_src;  // pointer to source code string;
 
 int poolsize; // default size of text/data/stack
-int *pc, *bp, *sp, ax, cycle; // virtual machine registers
+uint32_t *pc, *bp, *sp, ax, cycle; // virtual machine registers
 
 int *current_id, // current parsed ID
     *symbols,    // symbol table
@@ -71,7 +72,7 @@ void next() {
         if (token == '\n') {
             if (assembly) {
                 // print compile info
-                printf("%d: %.*s", line, src-old_src, old_src);
+                printf(";%d: %.*s", line, src-old_src, old_src);
                 old_src = src;
 
                 while (old_text < text) {
@@ -80,7 +81,7 @@ void next() {
                                       "OPEN,READ,CLOS,PRTF,MALC,MSET,MCMP,EXIT"[*++old_text * 5]);
 
                     if (*old_text <= ADJ)
-                        printf(" %d\n", *++old_text);
+                        printf(" 0x%x\n", *++old_text);
                     else
                         printf("\n");
                 }
@@ -372,6 +373,8 @@ void expression(int level) {
 
             if (token == Int) {
                 match(Int);
+            } else if (token == Float) {
+                match(Float);
             } else if (token == Char) {
                 match(Char);
                 expr_type = CHAR;
@@ -470,10 +473,12 @@ void expression(int level) {
         else if (token == '(') {
             // cast or parenthesis
             match('(');
-            if (token == Int || token == Char) {
+            if (token == Int || token == Float || token == Char) 
+            {
                 tmp = (token == Char) ? CHAR : INT; // cast type
                 match(token);
-                while (token == Mul) {
+                while (token == Mul) 
+                {
                     match(Mul);
                     tmp = tmp + PTR;
                 }
@@ -483,7 +488,9 @@ void expression(int level) {
                 expression(Inc); // cast has precedence as Inc(++)
 
                 expr_type  = tmp;
-            } else {
+            } 
+            else 
+            {
                 // normal parenthesis
                 expression(Assign);
                 match(')');
@@ -1007,6 +1014,8 @@ void function_parameter() {
         type = INT;
         if (token == Int) {
             match(Int);
+        } else if (token == Float) {
+            match(Float);
         } else if (token == Char) {
             type = CHAR;
             match(Char);
@@ -1054,7 +1063,7 @@ void function_body() {
     int type;
     pos_local = index_of_bp;
 
-    while (token == Int || token == Char) {
+    while (token == Int || token == Float || token == Char) {
         // local variable declaration, just like global ones.
         basetype = (token == Int) ? INT : CHAR;
         match(token);
@@ -1157,6 +1166,9 @@ void global_declaration() {
     if (token == Int) {
         match(Int);
     }
+    else if (token == Float) {
+        match(Float);
+    }
     else if (token == Char) {
         match(Char);
         basetype = CHAR;
@@ -1210,16 +1222,22 @@ void program() {
     }
 }
 
-int eval() {
-    int op, *tmp;
-    cycle = 0;
-    while (1) {
-        cycle ++;
+int eval() 
+{
+    int *tmp;
+    int cycle=0;
+
+    for(;;) 
+    {
+        int op;
+        
+        ++cycle;
         op = *pc++; // get next operation code
 
         // print debug info
-        if (debug) {
-            printf("%d> %.4s", cycle,
+        if (debug) 
+        {
+            printf("[%08d]\t%08d> %.4s", cycle, (int)pc,
                    & "LEA ,IMM ,JMP ,CALL,JZ  ,JNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PUSH,"
                    "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
                    "OPEN,READ,CLOS,PRTF,MALC,MSET,MCMP,EXIT"[op * 5]);
@@ -1228,51 +1246,59 @@ int eval() {
             else
                 printf("\n");
         }
-        if (op == IMM)       {ax = *pc++;}                                     // load immediate value to ax
-        else if (op == LC)   {ax = *(char *)ax;}                               // load character to ax, address in ax
-        else if (op == LI)   {ax = *(int *)ax;}                                // load integer to ax, address in ax
-        else if (op == SC)   {ax = *(char *)*sp++ = ax;}                       // save character to address, value in ax, address on stack
-        else if (op == SI)   {*(int *)*sp++ = ax;}                             // save integer to address, value in ax, address on stack
-        else if (op == PUSH) {*--sp = ax;}                                     // push the value of ax onto the stack
-        else if (op == JMP)  {pc = (int *)*pc;}                                // jump to the address
-        else if (op == JZ)   {pc = ax ? pc + 1 : (int *)*pc;}                   // jump if ax is zero
-        else if (op == JNZ)  {pc = ax ? (int *)*pc : pc + 1;}                   // jump if ax is not zero
-        else if (op == CALL) {*--sp = (int)(pc+1); pc = (int *)*pc;}           // call subroutine
-        //else if (op == RET)  {pc = (int *)*sp++;}                              // return from subroutine;
-        else if (op == ENT)  {*--sp = (int)bp; bp = sp; sp = sp - *pc++;}      // make new stack frame
-        else if (op == ADJ)  {sp = sp + *pc++;}                                // add esp, <size>
-        else if (op == LEV)  {sp = bp; bp = (int *)*sp++; pc = (int *)*sp++;}  // restore call frame and PC
-        else if (op == LEA)  {ax = (int)(bp + *pc++);}                         // load address for arguments.
 
-        else if (op == OR)  ax = *sp++ | ax;
-        else if (op == XOR) ax = *sp++ ^ ax;
-        else if (op == AND) ax = *sp++ & ax;
-        else if (op == EQ)  ax = *sp++ == ax;
-        else if (op == NE)  ax = *sp++ != ax;
-        else if (op == LT)  ax = *sp++ < ax;
-        else if (op == LE)  ax = *sp++ <= ax;
-        else if (op == GT)  ax = *sp++ >  ax;
-        else if (op == GE)  ax = *sp++ >= ax;
-        else if (op == SHL) ax = *sp++ << ax;
-        else if (op == SHR) ax = *sp++ >> ax;
-        else if (op == ADD) ax = *sp++ + ax;
-        else if (op == SUB) ax = *sp++ - ax;
-        else if (op == MUL) ax = *sp++ * ax;
-        else if (op == DIV) ax = *sp++ / ax;
-        else if (op == MOD) ax = *sp++ % ax;
+    	switch(op)
+    	{
+            case IMM:  {ax = *pc++;}                                    break; // load immediate value to ax
+            case LC:   {ax = *(char *)ax;}                              break; // load character to ax, address in ax
+            case LI:   {ax = *(int *)ax;}                               break; // load integer to ax, address in ax
+            case SC:   {ax = *(char *)*sp++ = ax;}                      break; // save character to address, value in ax, address on stack
+            case SI:   {*(int *)*sp++ = ax;}                            break; // save integer to address, value in ax, address on stack
+            case PUSH: {*--sp = ax;}                                    break; // push the value of ax onto the stack
+            case JMP:  {pc = (int *)*pc;}                               break; // jump to the address
+            case JZ:   {pc = ax ? pc + 1 : (int *)*pc;}                 break; // jump if ax is zero
+            case JNZ:  {pc = ax ? (int *)*pc : pc + 1;}                 break; // jump if ax is not zero
+            case CALL: {*--sp = (int)(pc+1); pc = (int *)*pc;}          break; // call subroutine
+            //case RET:  {pc = (int *)*sp++;}                           break; // return from subroutine;
+            case ENT:  {*--sp = (int)bp; bp = sp; sp = sp - *pc++;}     break; // make new stack frame
+            case ADJ:  {sp = sp + *pc++;}                               break; // add esp, <size>
+            case LEV:  {sp = bp; bp = (int *)*sp++; pc = (int *)*sp++;} break; // restore call frame and PC
+            case LEA:  {ax = (int)(bp + *pc++);}                        break; // load address for arguments.
 
-        else if (op == EXIT) { printf("exit(%d)", *sp); return *sp;}
-        else if (op == OPEN) { ax = open((char *)sp[1], sp[0]); }
-        else if (op == CLOS) { ax = close(*sp);}
-        else if (op == READ) { ax = read(sp[2], (char *)sp[1], *sp); }
-        else if (op == PRTF) { tmp = sp + pc[1]; ax = printf((char *)tmp[-1], tmp[-2], tmp[-3], tmp[-4], tmp[-5], tmp[-6]); }
-        else if (op == MALC) { ax = (int)malloc(*sp);}
-        else if (op == MSET) { ax = (int)memset((char *)sp[2], sp[1], *sp);}
-        else if (op == MCMP) { ax = memcmp((char *)sp[2], (char *)sp[1], *sp);}
-        else {
-            printf("unknown instruction:%d\n", op);
-            return -1;
+            case OR:  ax = *sp++ | ax;                                  break;
+            case XOR: ax = *sp++ ^ ax;                                  break;
+            case AND: ax = *sp++ & ax;                                  break;
+            case EQ:  ax = *sp++ == ax;                                 break;
+            case NE:  ax = *sp++ != ax;                                 break;
+            case LT:  ax = *sp++ < ax;                                  break;
+            case LE:  ax = *sp++ <= ax;                                 break;
+            case GT:  ax = *sp++ >  ax;                                 break;
+            case GE:  ax = *sp++ >= ax;                                 break;
+            case SHL: ax = *sp++ << ax;                                 break;
+            case SHR: ax = *sp++ >> ax;                                 break;
+            case ADD: ax = *sp++ + ax;                                  break;
+            case SUB: ax = *sp++ - ax;                                  break;
+            case MUL: ax = *sp++ * ax;                                  break;
+            case DIV: ax = *sp++ / ax;                                  break;
+            case MOD: ax = *sp++ % ax;                                  break;
+
+            case EXIT: { printf("exit(%d)", *sp); return *sp;}          break;
+            case OPEN: { ax = open((char *)sp[1], sp[0]); }             break;
+            case CLOS: { ax = close(*sp);}                              break;
+            case READ: { ax = read(sp[2], (char *)sp[1], *sp); }        break;
+            case PRTF: { tmp = sp + pc[1]; ax = printf((char *)tmp[-1], tmp[-2], tmp[-3], tmp[-4], tmp[-5], tmp[-6]); } break;
+            case MALC: { ax = (int)malloc(*sp);}                            break;
+            case MSET: { ax = (int)memset((char *)sp[2], sp[1], *sp);}      break;
+            case MCMP: { ax = memcmp((char *)sp[2], (char *)sp[1], *sp);}   break;
+            case FREE: { free((void*)*sp); }                                break;
+            default:
+                {
+                    printf("unknown instruction:%d @%08d\n", op, (int)pc);
+                    return -1;
+                }
+                break;
         }
+
     }
 }
 
@@ -1333,8 +1359,8 @@ int main(int argc, char **argv)
 
     old_text = text;
 
-    src = "char else enum if int return sizeof while "
-          "open read close printf malloc memset memcmp exit void main";
+    src = "char else enum if int float return sizeof while "
+          "open read close printf malloc memset memcmp free exit void main";
 
      // add keywords to symbol table
     i = Char;
